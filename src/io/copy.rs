@@ -144,6 +144,7 @@ where
             #[pin]
             writer: W,
             amt: u64,
+            reader_eof: bool
         }
     }
 
@@ -156,11 +157,18 @@ where
 
         fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
             let mut this = self.project();
+
             loop {
-                let buffer = futures_core::ready!(this.reader.as_mut().poll_fill_buf(cx))?;
-                if buffer.is_empty() {
+                if *this.reader_eof {
                     futures_core::ready!(this.writer.as_mut().poll_flush(cx))?;
                     return Poll::Ready(Ok(*this.amt));
+                }
+
+                let buffer = futures_core::ready!(this.reader.as_mut().poll_fill_buf(cx))?;
+
+                if buffer.is_empty() {
+                    *this.reader_eof = true;
+                    continue;
                 }
 
                 let i = futures_core::ready!(this.writer.as_mut().poll_write(cx, buffer))?;
@@ -176,6 +184,7 @@ where
     let future = CopyFuture {
         reader: BufReader::new(reader),
         writer,
+        reader_eof: false,
         amt: 0,
     };
     future.await.context(|| String::from("io::copy failed"))
